@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from "uuid";
 import { db } from "./server/db.js";
 import { GoogleGenAI } from "@google/genai";
 import jwt from "jsonwebtoken";
+import { adminAuth } from "./server/firebaseAdmin.js";
 
 let ai: GoogleGenAI | null = null;
 export function getAI() {
@@ -26,10 +27,12 @@ declare global {
   namespace Express {
     interface Request {
       user?: any;
+      firebaseUser?: any;
     }
   }
 }
 
+// Local mock JWT auth
 export const authenticateToken = (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -41,6 +44,23 @@ export const authenticateToken = (req: Request, res: Response, next: NextFunctio
     req.user = user;
     next();
   });
+};
+
+// Newly added Firebase Auth middleware intended for the Cloud Run Migration
+export const authenticateFirebaseToken = async (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) return res.status(401).json({ error: "Access denied: Missing token" });
+
+  try {
+    const decodedToken = await adminAuth.verifyIdToken(token);
+    req.firebaseUser = decodedToken;
+    req.user = { id: decodedToken.uid, email: decodedToken.email, role: 'Reviewing Officer' }; // Placeholder map
+    next();
+  } catch (error) {
+    return res.status(403).json({ error: "Access denied: Invalid Firebase token" });
+  }
 };
 
 export const requireRole = (allowedRoles: string[]) => {
@@ -100,6 +120,7 @@ function getMockExtraction(caseData: any): string {
       "remaining_days": 84
     },
     "urgency": "High",
+    "overall_summary": "This is a High priority writ petition mandating the filing of objections within 14 days and maintenance of status quo.",
     "confidence_scores": {
       "overall": 94,
       "parties": 98,
@@ -240,6 +261,8 @@ async function startServer() {
   // Mock processing route that generates fake AI extracted data (simulate delay)
   app.post("/api/cases/:id/process", authenticateToken, async (req, res) => {
     const caseId = req.params.id;
+    const { ocrText } = req.body || {};
+    
     // Update status to processing
     const updateStmt = db.prepare("UPDATE cases SET status = 'processing' WHERE id = ?");
     updateStmt.run(caseId);
@@ -251,8 +274,14 @@ async function startServer() {
       const filePath = (caseData as any).file_path;
       const fileBytes = fs.readFileSync(filePath);
 
-      const promptText = `You are a highly skilled legal extraction agent for the Karnataka Government CCMS platform.
-Extract crucial workflow-oriented information from the provided High Court judgment PDF.
+      let promptText = `You are a highly skilled legal extraction agent for the Karnataka Government CCMS platform.
+Extract crucial workflow-oriented information from the provided High Court judgment PDF.`;
+
+      if (ocrText && ocrText.trim().length > 0) {
+        promptText += `\n\nIMPORTANT: We have performed OCR on this document. You MUST prioritize the following OCR-ed text for accurate extraction, particularly for scanned documents where native PDF text might be garbled or missing.\n\n--- OCR TEXT START ---\n${ocrText}\n--- OCR TEXT END ---\n`;
+      }
+
+      promptText += `
 You must return ONLY a structured JSON object exactly matching this schema, no markdown blocks around the JSON:
 {
   "case_number": "string (e.g. WP 1234/2026)",
@@ -270,6 +299,7 @@ You must return ONLY a structured JSON object exactly matching this schema, no m
     "remaining_days": 90
   },
   "urgency": "High | Medium | Low",
+  "overall_summary": "string (concise AI-powered summary of the key aspects of the case and required actions)",
   "confidence_scores": {
     "overall": 95,
     "parties": 98,
@@ -317,8 +347,16 @@ Ensure robust confidence scores based on text clarity and source quotes for ever
             }
           });
           jsonText = response.text || "{}";
-        } catch (apiError) {
-          console.error("Gemini API Error, falling back to mock data:", apiError);
+          // Remove Markdown block formatting if present
+          if (jsonText.startsWith("```")) {
+            jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+          }
+        } catch (apiError: any) {
+          if (apiError?.message?.includes('API key not valid')) {
+             console.warn("Invalid Gemini API Key provided. Falling back to mock data.");
+          } else {
+             console.error("Gemini API Error, falling back to mock data:", apiError.message || apiError);
+          }
           jsonText = getMockExtraction(caseData as any);
         }
       } else {
@@ -371,6 +409,30 @@ Ensure robust confidence scores based on text clarity and source quotes for ever
     res.json({ message: "Verification saved" });
   });
 
+  // Bulk Verify
+  app.post("/api/cases/bulk-verify", authenticateToken, (req, res) => {
+    const { action, reviewerNotes, userId, caseIds } = req.body;
+    // action: 'approved' | 'rejected'
+
+    if (!Array.isArray(caseIds)) {
+      return res.status(400).json({ error: "caseIds must be an array" });
+    }
+
+    db.transaction(() => {
+      const updateExtract = db.prepare("UPDATE extracted_data SET status = ?, reviewer_notes = ?, reviewed_at = ?, reviewed_by = ? WHERE case_id = ?");
+      const updateCase = db.prepare("UPDATE cases SET status = ? WHERE id = ?");
+      const logStmt = db.prepare("INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, timestamp, details) VALUES (?, ?, ?, ?, ?, ?, ?)");
+
+      for (const caseId of caseIds) {
+        updateExtract.run(action, reviewerNotes, new Date().toISOString(), userId, caseId);
+        updateCase.run(action, caseId);
+        logStmt.run(uuidv4(), userId, action === 'approved' ? "BULK_APPROVE_CASE" : "BULK_REJECT_CASE", "CASE", caseId, new Date().toISOString(), reviewerNotes || "Bulk action");
+      }
+    })();
+
+    res.json({ message: "Bulk verification saved" });
+  });
+
   // Dashboard Stats
   app.get("/api/dashboard", authenticateToken, (req, res) => {
     const pendingReview = db.prepare("SELECT count(*) as count FROM cases WHERE status = 'pending_review'").get();
@@ -401,6 +463,17 @@ Ensure robust confidence scores based on text clarity and source quotes for ever
     const caseData = caseStmt.get(req.params.id);
     if (!caseData || !(caseData as any).file_path) return res.status(404).send("File not found");
     res.sendFile((caseData as any).file_path);
+  });
+
+  // Handle unresolved API routes by returning JSON instead of Vite HTML fallback
+  app.use('/api', (req, res) => {
+    res.status(404).json({ error: `API route not found: ${req.method} ${req.url}` });
+  });
+
+  // Global Error Handler for API routes
+  app.use('/api', (err: any, req: Request, res: Response, next: NextFunction) => {
+    console.error("API Error:", err);
+    res.status(500).json({ error: err.message || "Internal Server Error" });
   });
 
   // Vite middleware for development

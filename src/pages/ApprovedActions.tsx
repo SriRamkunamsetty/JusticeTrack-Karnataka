@@ -8,12 +8,16 @@ import { useOutletContext, useNavigate } from 'react-router-dom';
 export default function ApprovedActions() {
   const [cases, setCases] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  const [statusFilter, setStatusFilter] = useState('approved');
+  const [dateRange, setDateRange] = useState('all');
+
   const { searchTerm } = useOutletContext<{ searchTerm: string }>() || { searchTerm: '' };
   const navigate = useNavigate();
 
   useEffect(() => {
     const token = localStorage.getItem('token');
-    fetch('/api/cases?status=approved', { headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) } })
+    fetch('/api/cases', { headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) } })
       .then(r => r.json())
       .then(data => {
         setCases(data);
@@ -26,6 +30,17 @@ export default function ApprovedActions() {
   }, []);
 
   const filteredCases = cases.filter(c => {
+    // Status Filter
+    if (statusFilter !== 'all' && c.case?.status !== statusFilter) return false;
+
+    // Date Range Filter
+    if (dateRange !== 'all') {
+      const uploadDate = new Date(c.case?.upload_date);
+      const now = new Date();
+      if (dateRange === '7d' && now.getTime() - uploadDate.getTime() > 7 * 24 * 60 * 60 * 1000) return false;
+      if (dateRange === '30d' && now.getTime() - uploadDate.getTime() > 30 * 24 * 60 * 60 * 1000) return false;
+    }
+
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
     const caseNum = c.case?.case_number?.toLowerCase() || '';
@@ -53,9 +68,32 @@ export default function ApprovedActions() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <div>
-        <h1 className="text-2xl font-bold text-kar-slate">Approved Government Actions</h1>
-        <p className="text-kar-slate/60">Verified legal workflows dispatched to respective departments.</p>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center space-y-4 md:space-y-0">
+        <div>
+          <h1 className="text-2xl font-bold text-kar-slate">Approved Government Actions</h1>
+          <p className="text-kar-slate/60">Verified legal workflows dispatched to respective departments.</p>
+        </div>
+        <div className="flex items-center space-x-3 w-full md:w-auto">
+            <select 
+                className="text-xs p-1 border border-black/10 rounded focus:ring-1 focus:ring-kar-blue w-full md:w-auto"
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value)}
+            >
+                <option value="all">All Dates</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+            </select>
+            <select 
+                className="text-xs p-1 border border-black/10 rounded focus:ring-1 focus:ring-kar-blue w-full md:w-auto"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+            >
+                <option value="all">All Statuses</option>
+                <option value="pending_review">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+            </select>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -73,7 +111,7 @@ export default function ApprovedActions() {
             <Card key={c.case.id} className="border-t-4 border-t-kar-success flex flex-col h-full hover:shadow-md transition-shadow">
               <CardHeader className="pb-3 border-b border-black/5">
                 <div className="flex justify-between items-start mb-2">
-                  <Badge className="bg-kar-success/10 text-kar-success border-transparent">Approved</Badge>
+                  <Badge className={`border-transparent ${c.case.status === 'approved' ? 'bg-kar-success/10 text-kar-success' : c.case.status === 'rejected' ? 'bg-kar-error/10 text-kar-error' : 'bg-kar-warning/10 text-kar-warning'}`}>{c.case.status}</Badge>
                   <span className="text-xs text-kar-slate/50">{new Date(c.case.upload_date).toLocaleDateString()}</span>
                 </div>
                 <CardTitle className="text-lg text-kar-blue flex items-center">
@@ -85,6 +123,14 @@ export default function ApprovedActions() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-4 flex-1 flex flex-col space-y-4">
+                
+                {exData.overall_summary && (
+                   <div className="bg-kar-blue/5 border border-kar-blue/10 rounded-md p-3 text-sm">
+                      <div className="font-semibold text-kar-blue mb-1 text-xs uppercase tracking-wider">AI Summary</div>
+                      <p className="text-kar-slate/80 line-clamp-3">{exData.overall_summary}</p>
+                   </div>
+                )}
+
                 <div className="flex-1 space-y-3">
                   {actions.slice(0, 2).map((a, i) => {
                     const isUrgent = a.priority === 'High' || a.urgency === 'High';

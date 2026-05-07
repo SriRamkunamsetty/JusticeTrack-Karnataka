@@ -1,0 +1,89 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Phase 3: Primitive Definition
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { 
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Super Admin';
+    }
+
+    // Validation definitions
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'email', 'role']) &&
+             data.name is string && data.name.size() <= 100 &&
+             data.email is string && data.email.size() <= 100 &&
+             data.role is string && data.role.size() <= 50;
+    }
+
+    function isValidCase(data) {
+      return data.keys().hasAll(['file_name', 'status', 'upload_date', 'uploaded_by']) &&
+             data.file_name is string && data.file_name.size() <= 200 &&
+             data.status is string && data.status.size() <= 20 &&
+             data.upload_date is string && data.upload_date.size() <= 50 &&
+             data.uploaded_by is string && data.uploaded_by.size() <= 128 &&
+             (data.keys().hasAny(['case_number']) == false || (data.case_number is string && data.case_number.size() <= 100)) &&
+             (data.keys().hasAny(['file_url']) == false || (data.file_url is string && data.file_url.size() <= 1024));
+    }
+
+    function isValidExtractedData(data) {
+      return data.keys().hasAll(['case_id', 'status']) &&
+             data.case_id is string && data.case_id.size() <= 128 &&
+             data.status is string && data.status.size() <= 50 &&
+             (data.keys().hasAny(['actions']) == false || (data.actions is string && data.actions.size() <= 5000)) &&
+             (data.keys().hasAny(['appeal_deadline']) == false || (data.appeal_deadline is string && data.appeal_deadline.size() <= 50)) &&
+             (data.keys().hasAny(['urgency']) == false || (data.urgency is string && data.urgency.size() <= 50)) &&
+             (data.keys().hasAny(['departments']) == false || (data.departments is string && data.departments.size() <= 5000)) &&
+             (data.keys().hasAny(['raw_json']) == false || (data.raw_json is string && data.raw_json.size() <= 100000)) &&
+             (data.keys().hasAny(['reviewer_notes']) == false || (data.reviewer_notes is string && data.reviewer_notes.size() <= 5000)) &&
+             (data.keys().hasAny(['reviewed_at']) == false || (data.reviewed_at is string && data.reviewed_at.size() <= 50)) &&
+             (data.keys().hasAny(['reviewed_by']) == false || (data.reviewed_by is string && data.reviewed_by.size() <= 128));
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['user_id', 'action', 'timestamp']) &&
+             data.user_id is string && data.user_id.size() <= 128 &&
+             data.action is string && data.action.size() <= 50 &&
+             data.timestamp is string && data.timestamp.size() <= 50 &&
+             (data.keys().hasAny(['entity_type']) == false || (data.entity_type is string && data.entity_type.size() <= 50)) &&
+             (data.keys().hasAny(['entity_id']) == false || (data.entity_id is string && data.entity_id.size() <= 128)) &&
+             (data.keys().hasAny(['details']) == false || (data.details is string && data.details.size() <= 5000));
+    }
+
+    // Phase 4: Rules Implementation
+    match /{document=**} { 
+      allow read, write: if false; 
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && request.auth.uid == userId;
+      allow update: if isSignedIn() && isValidUser(incoming()) && (isAdmin() || (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['name'])));
+    }
+
+    match /cases/{caseId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(caseId) && isValidCase(incoming());
+      allow update: if isSignedIn() && isValidCase(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'case_number', 'file_url']);
+    }
+
+    match /extractedData/{extractionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(extractionId) && isValidExtractedData(incoming()) && exists(/databases/$(database)/documents/cases/$(incoming().case_id));
+      allow update: if isSignedIn() && isValidExtractedData(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['actions', 'appeal_deadline', 'urgency', 'departments', 'raw_json', 'status', 'reviewer_notes', 'reviewed_at', 'reviewed_by']);
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming()) && incoming().user_id == request.auth.uid;
+      // Audit logs are append-only. No updates or deletes.
+    }
+  }
+}

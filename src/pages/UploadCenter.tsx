@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Upload, File, Loader2, CheckCircle2, ScanText, BrainCircuit, Network, ClipboardCheck } from 'lucide-react';
-import { cn } from '@/lib/utils'; // Make sure cn is exported correctly
+import { cn } from '@/lib/utils';
+import { extractTextFromPdf } from '@/lib/ocr';
 
 export default function UploadCenter() {
   const [file, setFile] = useState<File | null>(null);
@@ -46,19 +47,31 @@ export default function UploadCenter() {
       setUploading(false);
       setProcessing(true);
       
-      // Simulate Agent Pipeline UX progress locally while the actual request runs
+      // Step 1: Secure Uploading (done)
+      setAgentStep(1); 
+      
+      // Step 2: OCR Agent
+      const ocrText = await extractTextFromPdf(file, (progress) => {
+          // Could update a progress bar here
+      });
+      
+      setAgentStep(2);
+      
+      // Simulate subsequent Agent Pipeline UX progress locally
       const stepsTimers = [
-          setTimeout(() => setAgentStep(1), 1000), // OCR
-          setTimeout(() => setAgentStep(2), 2500), // Document Structure
-          setTimeout(() => setAgentStep(3), 4500), // Extraction Agent
-          setTimeout(() => setAgentStep(4), 7000), // Department Routing
-          setTimeout(() => setAgentStep(5), 9000), // Confidence
+          setTimeout(() => setAgentStep(3), 1500), // Document Structure
+          setTimeout(() => setAgentStep(4), 3000), // Department Routing
+          setTimeout(() => setAgentStep(5), 4500), // Confidence
       ];
 
       // Trigger processing
       await fetch(`/api/cases/${data.id}/process`, {
         method: 'POST',
-        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+        headers: { 
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}) 
+        },
+        body: JSON.stringify({ ocrText })
       });
       
       // Clear timers and go to verification

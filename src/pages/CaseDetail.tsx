@@ -62,7 +62,15 @@ export default function CaseDetail() {
     );
   }
 
-  const aiActions = extractedData?.actions || [];
+  let aiActions = [];
+  try {
+    const actionsData = extractedData?.actions;
+    aiActions = Array.isArray(actionsData) ? actionsData : (actionsData ? JSON.parse(actionsData) : []);
+    if (!Array.isArray(aiActions)) aiActions = [];
+  } catch(e) {
+    aiActions = [];
+  }
+
   const statusColor = caseData.status === 'approved' ? 'bg-kar-success' : caseData.status === 'rejected' ? 'bg-kar-error' : 'bg-kar-blue';
 
   return (

@@ -16,6 +16,7 @@ import '@react-pdf-viewer/search/lib/styles/index.css';
 
 export default function VerificationWorkspace() {
   const [cases, setCases] = useState<any[]>([]);
+  const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
   const [selectedCase, setSelectedCase] = useState<any>(null);
   const [notes, setNotes] = useState('');
   const [highlightKeyword, setHighlightKeyword] = useState('');
@@ -23,6 +24,7 @@ export default function VerificationWorkspace() {
   
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [confirmActionType, setConfirmActionType] = useState<'approved' | 'rejected' | null>(null);
+  const [isBulkAction, setIsBulkAction] = useState(false);
 
   const navigate = useNavigate();
   const { searchTerm } = useOutletContext<{ searchTerm: string }>() || { searchTerm: '' };
@@ -48,7 +50,8 @@ export default function VerificationWorkspace() {
         }
       }
     }
-  }, [highlightKeyword, highlight, jumpToNextMatch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightKeyword]);
 
   useEffect(() => {
     // Add auth token
@@ -91,35 +94,64 @@ export default function VerificationWorkspace() {
   };
 
   const executeVerify = async () => {
-    if (!selectedCase || !confirmActionType) return;
+    if (!confirmActionType) return;
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     const token = localStorage.getItem('token');
+
+    if (isBulkAction) {
+      await fetch(`/api/cases/bulk-verify`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          action: confirmActionType,
+          reviewerNotes: notes || "Bulk action applied.",
+          userId: user.id || 'demo',
+          caseIds: selectedCaseIds
+        })
+      });
+      // Refresh
+      setCases(cases.filter(c => !selectedCaseIds.includes(c.id || c.case.id)));
+      setSelectedCaseIds([]);
+    } else {
+      if (!selectedCase) return;
+      await fetch(`/api/cases/${selectedCase.case.id}/verify`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          action: confirmActionType,
+          reviewerNotes: notes,
+          userId: user.id || 'demo',
+          finalExtraction: {
+            ...selectedCase.extractedData,
+            raw_json: JSON.stringify(editedData)
+          }
+        })
+      });
+      // Refresh
+      setCases(cases.filter(c => (c.id || c.case.id) !== selectedCase.case.id));
+      setSelectedCase(null);
+    }
     
-    await fetch(`/api/cases/${selectedCase.case.id}/verify`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({
-        action: confirmActionType,
-        reviewerNotes: notes,
-        userId: user.id || 'demo',
-        finalExtraction: {
-          ...selectedCase.extractedData,
-          raw_json: JSON.stringify(editedData)
-        }
-      })
-    });
-    
-    // Refresh
-    setSelectedCase(null);
-    setCases(cases.filter(c => (c.id || c.case.id) !== selectedCase.case.id));
     setConfirmDialogOpen(false);
     setConfirmActionType(null);
+    setIsBulkAction(false);
   };
 
   const triggerVerify = (action: 'approved' | 'rejected') => {
+    setIsBulkAction(false);
+    setConfirmActionType(action);
+    setConfirmDialogOpen(true);
+  };
+
+  const triggerBulkVerify = (action: 'approved' | 'rejected') => {
+    if (selectedCaseIds.length === 0) return;
+    setIsBulkAction(true);
     setConfirmActionType(action);
     setConfirmDialogOpen(true);
   };
@@ -146,15 +178,44 @@ export default function VerificationWorkspace() {
     }
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
-        <div>
-          <h1 className="text-2xl font-bold text-kar-slate">Pending Verification</h1>
-          <p className="text-kar-slate/60">Review and verify AI-extracted data against the original judgment.</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-kar-slate">Pending Verification</h1>
+            <p className="text-kar-slate/60">Review and verify AI-extracted data against the original judgment.</p>
+          </div>
+          {selectedCaseIds.length > 0 && (
+            <div className="flex bg-white shadow-sm border border-black/10 rounded-lg p-1.5 animate-in slide-in-from-top-2">
+               <span className="px-3 py-1.5 text-sm font-medium text-kar-blue flex items-center border-r border-black/5 mr-1">
+                 {selectedCaseIds.length} Selected
+               </span>
+               <Button variant="danger" size="sm" className="mr-1" onClick={() => triggerBulkVerify('rejected')}>
+                 <X className="mr-2 h-4 w-4" /> Reject
+               </Button>
+               <Button variant="primary" size="sm" className="bg-kar-success hover:bg-kar-success/90 text-white" onClick={() => triggerBulkVerify('approved')}>
+                 <Check className="mr-2 h-4 w-4" /> Approve
+               </Button>
+            </div>
+          )}
         </div>
         <Card>
           <CardContent className="p-0">
             <table className="w-full text-left text-sm text-kar-slate">
               <thead className="bg-black/5 text-xs uppercase border-b border-black/10">
                 <tr>
+                  <th className="px-4 py-4 w-12">
+                    <input 
+                      type="checkbox" 
+                      className="rounded border-gray-300 text-kar-blue focus:ring-kar-blue"
+                      checked={filteredCases.length > 0 && selectedCaseIds.length === filteredCases.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedCaseIds(filteredCases.map(c => c.case?.id || c.id));
+                        } else {
+                          setSelectedCaseIds([]);
+                        }
+                      }}
+                    />
+                  </th>
                   <th className="px-6 py-4 font-medium">Case Number</th>
                   <th className="px-6 py-4 font-medium">Upload Date</th>
                   <th className="px-6 py-4 font-medium">Status</th>
@@ -164,8 +225,20 @@ export default function VerificationWorkspace() {
               <tbody className="divide-y divide-black/5">
                 {filteredCases.map(c => {
                   const caseData = c.case || c;
+                  const isChecked = selectedCaseIds.includes(caseData.id);
                   return (
-                  <tr key={caseData.id} className="hover:bg-black/5 transition-colors">
+                  <tr key={caseData.id} className={`hover:bg-black/5 transition-colors ${isChecked ? 'bg-kar-blue/5' : ''}`}>
+                    <td className="px-4 py-4">
+                      <input 
+                        type="checkbox" 
+                        className="rounded border-gray-300 text-kar-blue focus:ring-kar-blue"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedCaseIds([...selectedCaseIds, caseData.id]);
+                          else setSelectedCaseIds(selectedCaseIds.filter(id => id !== caseData.id));
+                        }}
+                      />
+                    </td>
                     <td className="px-6 py-4 font-medium">{caseData.case_number}</td>
                     <td className="px-6 py-4">{new Date(caseData.upload_date).toLocaleDateString()}</td>
                     <td className="px-6 py-4">
@@ -184,7 +257,7 @@ export default function VerificationWorkspace() {
                 })}
                 {filteredCases.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-6 py-8 text-center text-kar-slate/50">
+                    <td colSpan={5} className="px-6 py-8 text-center text-kar-slate/50">
                       {searchTerm ? 'No pending records match your search.' : 'No pending records for review.'}
                     </td>
                   </tr>
@@ -198,7 +271,14 @@ export default function VerificationWorkspace() {
   }
 
   const exData = JSON.parse(selectedCase.extractedData?.raw_json || '{}');
-  const aiActions = selectedCase.extractedData?.actions ? JSON.parse(selectedCase.extractedData.actions) : [];
+  let aiActions: any[] = [];
+  try {
+    const p = selectedCase.extractedData?.actions;
+    aiActions = Array.isArray(p) ? p : (p ? JSON.parse(p) : []);
+    if (!Array.isArray(aiActions)) aiActions = [];
+  } catch(e) {
+     aiActions = [];
+  }
   // Handle confidence scores visually
   const scores = exData.confidence_scores || {};
   
@@ -285,7 +365,8 @@ export default function VerificationWorkspace() {
                  ) : (
                    <div 
                     className="text-sm font-medium cursor-pointer hover:text-kar-blue hover:underline"
-                    onClick={() => handleSourceClick(editedData.parties ? (Array.isArray(editedData.parties) ? editedData.parties[1] || editedData.parties[0] : editedData.parties) : '')}
+                    onMouseEnter={() => handleSourceClick(editedData.parties ? (Array.isArray(editedData.parties) ? editedData.parties[1] || editedData.parties[0] : editedData.parties) : '')}
+                    onMouseLeave={() => setHighlightKeyword('')}
                    >
                      {editedData.parties ? (Array.isArray(editedData.parties) ? editedData.parties.join(' vs ') : editedData.parties) : 'N/A'}
                    </div>
@@ -306,7 +387,8 @@ export default function VerificationWorkspace() {
                  ) : (
                    <div 
                     className="text-sm font-medium cursor-pointer hover:text-kar-blue hover:underline" 
-                    onClick={() => handleSourceClick(editedData.judge_name || editedData.judge)}
+                    onMouseEnter={() => handleSourceClick(editedData.judge_name || editedData.judge)}
+                    onMouseLeave={() => setHighlightKeyword('')}
                    >
                      {editedData.judge_name || editedData.judge || 'N/A'}
                    </div>
@@ -329,7 +411,8 @@ export default function VerificationWorkspace() {
                  ) : (
                    <div 
                     className="text-sm font-medium cursor-pointer hover:text-kar-blue hover:underline"
-                    onClick={() => handleSourceClick(editedData.judgment_date || editedData.date_of_order)}
+                    onMouseEnter={() => handleSourceClick(editedData.judgment_date || editedData.date_of_order)}
+                    onMouseLeave={() => setHighlightKeyword('')}
                    >
                      {editedData.judgment_date || editedData.date_of_order || 'N/A'}
                    </div>
@@ -381,8 +464,9 @@ export default function VerificationWorkspace() {
                   {(editedData.key_orders || []).map((ko: string, i: number) => (
                     <li 
                       key={i} 
-                      className="cursor-pointer hover:text-kar-blue transition-colors"
-                      onClick={() => handleSourceClick(ko)}
+                      className="cursor-pointer hover:text-kar-blue hover:bg-kar-blue/5 p-1 -ml-1 rounded transition-colors"
+                      onMouseEnter={() => handleSourceClick(ko)}
+                      onMouseLeave={() => setHighlightKeyword('')}
                     >
                       {ko}
                     </li>

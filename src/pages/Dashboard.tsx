@@ -10,6 +10,10 @@ export default function Dashboard() {
   const [recentAction, setRecentAction] = useState([]);
   const [priorityCases, setPriorityCases] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  const [statusFilter, setStatusFilter] = useState('pending_review');
+  const [dateRange, setDateRange] = useState('all');
+
   const navigate = useNavigate();
   const { searchTerm } = useOutletContext<{ searchTerm: string }>() || { searchTerm: '' };
 
@@ -22,7 +26,7 @@ export default function Dashboard() {
     const token = localStorage.getItem('token');
     Promise.all([
       fetch('/api/dashboard', { headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) } }).then(r => r.json()),
-      fetch('/api/cases?status=pending_review', { headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) } }).then(r => r.json())
+      fetch('/api/cases', { headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) } }).then(r => r.json())
     ]).then(([dashData, casesData]) => {
       setStats(dashData.stats);
       setRecentAction(dashData.recentActivity);
@@ -41,6 +45,17 @@ export default function Dashboard() {
   }, []);
 
   const filteredCases = priorityCases.filter(c => {
+    // Status Filter
+    if (statusFilter !== 'all' && c.case?.status !== statusFilter) return false;
+
+    // Date Range Filter
+    if (dateRange !== 'all') {
+      const uploadDate = new Date(c.case?.upload_date);
+      const now = new Date();
+      if (dateRange === '7d' && now.getTime() - uploadDate.getTime() > 7 * 24 * 60 * 60 * 1000) return false;
+      if (dateRange === '30d' && now.getTime() - uploadDate.getTime() > 30 * 24 * 60 * 60 * 1000) return false;
+    }
+
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
     const caseNum = c.case?.case_number?.toLowerCase() || '';
@@ -170,9 +185,30 @@ export default function Dashboard() {
                             <CardTitle>Priority Action Queue</CardTitle>
                             <CardDescription>Records requiring immediate department attention</CardDescription>
                         </div>
-                        <button onClick={() => navigate('/verification')} className="text-sm text-kar-blue hover:underline flex items-center">
-                            View All <ArrowRight className="h-4 w-4 ml-1" />
-                        </button>
+                        <div className="flex items-center space-x-3">
+                            <select 
+                                className="text-xs p-1 border border-black/10 rounded focus:ring-1 focus:ring-kar-blue"
+                                value={dateRange}
+                                onChange={(e) => setDateRange(e.target.value)}
+                            >
+                                <option value="all">All Dates</option>
+                                <option value="7d">Last 7 Days</option>
+                                <option value="30d">Last 30 Days</option>
+                            </select>
+                            <select 
+                                className="text-xs p-1 border border-black/10 rounded focus:ring-1 focus:ring-kar-blue"
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value)}
+                            >
+                                <option value="all">All Statuses</option>
+                                <option value="pending_review">Pending</option>
+                                <option value="approved">Approved</option>
+                                <option value="rejected">Rejected</option>
+                            </select>
+                            <button onClick={() => navigate('/verification')} className="text-sm text-kar-blue hover:underline flex items-center ml-2">
+                                View All <ArrowRight className="h-4 w-4 ml-1" />
+                            </button>
+                        </div>
                     </div>
                 </CardHeader>
                 <CardContent>
