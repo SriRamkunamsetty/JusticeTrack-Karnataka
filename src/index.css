@@ -1,0 +1,18 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Noto Sans", ui-sans-serif, system-ui, sans-serif;
+  --color-kar-red: #A51E22;
+  --color-kar-blue: #12355B;
+  --color-kar-cream: #F8F4EC;
+  --color-kar-ivory: #FAFAFA;
+  --color-kar-slate: #1F2937;
+  --color-kar-success: #2E7D32;
+  --color-kar-warning: #D97706;
+  --color-kar-error: #B91C1C;
+}
+
+body {
+  @apply bg-kar-ivory text-kar-slate font-sans antialiased;
+}
